@@ -36,7 +36,7 @@ CHANNEL_LINKS = [
 ]
 
 # Ссылка на файл для загрузки (загружается из файла)
-FILE_URL = "https://www.dropbox.com/scl/fi/qsq74prqeunndpcq1fuhg/ProTweaker-Installer-3.0.1.exe?rlkey=6nh4d13xm0xf9bayc3l6z973f&st=20obmgj4&dl=1"
+FILE_URL = "https://www.dropbox.com/scl/fi/qsq74prqeunndpcq1fuhg/ProTweaker-Installer-3.0.1.exe?rlkey=6nh4d13xm0xf9bayc3l6z973f&st=3w4uldwy&dl=1"
 
 # Хранилище для предыдущих сообщений (user_id -> message_id)
 user_messages: Dict[int, Optional[int]] = {}
