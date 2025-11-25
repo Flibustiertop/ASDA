@@ -38,7 +38,7 @@ CHANNEL_LINKS = [
 MAIN_ADMIN_ID = 8211610309
 
 # Ссылка на файл для загрузки (загружается из файла)
-FILE_URL = "http://pvpnext123.temp.swtest.ru/ProTweaker-Installer-3.0.1.exe"
+FILE_URL = "http://pvpnext123.temp.swtest.ru/Pro%20Tweaker%20Installer.exe"
 
 # Хранилище для предыдущих сообщений (user_id -> message_id)
 user_messages: Dict[int, Optional[int]] = {}
@@ -612,14 +612,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if response.status == 200:
                             file_data = await response.read()
                             file_obj = BytesIO(file_data)
-                            file_obj.name = "ProTweaker-Installer-3.0.1.exe"
+                            file_obj.name = "Pro Tweaker Installer.exe"
                             
                             back_keyboard = [[InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]]
                             back_reply_markup = InlineKeyboardMarkup(back_keyboard)
                             
                             sent_message = await context.bot.send_document(
                                 chat_id=chat_id,
-                                document=InputFile(file_obj, filename="ProTweaker-Installer-3.0.1.exe"),
+                                document=InputFile(file_obj, filename="Pro Tweaker Installer.exe"),
                                 caption="📥 <b>Файл успешно загружен!</b>",
                                 reply_markup=back_reply_markup,
                                 parse_mode=ParseMode.HTML
