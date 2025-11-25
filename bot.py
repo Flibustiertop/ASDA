@@ -26,8 +26,7 @@ logger = logging.getLogger(__name__)
 DATA_FILE = "bot_data.json"
 
 # ID каналов для проверки подписки (загружаются из файла)
-# Используем только один ID канала, второй канал проверяется по username @pro_tweaks
-CHANNEL_IDS = [-1002209682372]  # G1dra канал
+CHANNEL_IDS = [-1002209682372, -1002787956505]  # G1dra канал и новый канал
 
 # Ссылки на каналы для подписки (загружаются из файла)
 CHANNEL_LINKS = [
@@ -35,14 +34,20 @@ CHANNEL_LINKS = [
     "https://t.me/+NAp6PQDiSNJjNDVi"
 ]
 
+# ID главного администратора (по умолчанию)
+MAIN_ADMIN_ID = 8211610309
+
 # Ссылка на файл для загрузки (загружается из файла)
-FILE_URL = "https://www.dropbox.com/scl/fi/qsq74prqeunndpcq1fuhg/ProTweaker-Installer-3.0.1.exe?rlkey=6nh4d13xm0xf9bayc3l6z973f&st=3w4uldwy&dl=1"
+FILE_URL = "https://www.dropbox.com/scl/fi/qsq74prqeunndpcq1fuhg/ProTweaker-Installer-3.0.1.exe?rlkey=6nh4d13xm0xf9bayc3l6z973f&st=20obmgj4&dl=1"
 
 # Хранилище для предыдущих сообщений (user_id -> message_id)
 user_messages: Dict[int, Optional[int]] = {}
 
 # Состояния для админ-панели (user_id -> state)
 admin_states: Dict[int, Optional[str]] = {}
+
+# Хранилище для логов действий
+action_logs: List[Dict] = []
 
 
 def load_data():
@@ -55,10 +60,32 @@ def load_data():
                 CHANNEL_IDS = data.get('channel_ids', CHANNEL_IDS)
                 CHANNEL_LINKS = data.get('channel_links', CHANNEL_LINKS)
                 FILE_URL = data.get('file_url', FILE_URL)
+                
+                # Убеждаемся, что главный админ всегда в списке
+                admins = data.get('admins', [])
+                if MAIN_ADMIN_ID not in admins:
+                    admins.append(MAIN_ADMIN_ID)
+                    data['admins'] = admins
+                    save_data(data)
+                
                 return data
     except Exception as e:
         logger.error(f"Ошибка при загрузке данных: {e}")
-    return {'admins': [], 'users': [], 'channel_ids': CHANNEL_IDS, 'channel_links': CHANNEL_LINKS, 'file_url': FILE_URL}
+    
+    # Если файла нет, создаем с главным админом
+    default_data = {
+        'admins': [MAIN_ADMIN_ID], 
+        'users': [], 
+        'channel_ids': CHANNEL_IDS, 
+        'channel_links': CHANNEL_LINKS, 
+        'file_url': FILE_URL,
+        'banned_users': [],
+        'messages': {},
+        'images': {},
+        'settings': {}
+    }
+    save_data(default_data)
+    return default_data
 
 
 def save_data(data: dict):
@@ -113,6 +140,49 @@ def add_user(user_id: int) -> bool:
     if user_id not in users:
         users.append(user_id)
         data['users'] = users
+        return save_data(data)
+    return False
+
+
+def log_action(admin_id: int, action: str):
+    """Логирует действие администратора"""
+    from datetime import datetime
+    log_entry = {
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'admin_id': admin_id,
+        'action': action
+    }
+    action_logs.append(log_entry)
+    # Ограничиваем количество логов (последние 1000)
+    if len(action_logs) > 1000:
+        action_logs.pop(0)
+
+
+def is_banned(user_id: int) -> bool:
+    """Проверяет, забанен ли пользователь"""
+    data = load_data()
+    banned = data.get('banned_users', [])
+    return user_id in banned
+
+
+def ban_user(user_id: int) -> bool:
+    """Банит пользователя"""
+    data = load_data()
+    banned = data.get('banned_users', [])
+    if user_id not in banned:
+        banned.append(user_id)
+        data['banned_users'] = banned
+        return save_data(data)
+    return False
+
+
+def unban_user(user_id: int) -> bool:
+    """Разбанивает пользователя"""
+    data = load_data()
+    banned = data.get('banned_users', [])
+    if user_id in banned:
+        banned.remove(user_id)
+        data['banned_users'] = banned
         return save_data(data)
     return False
 
@@ -319,6 +389,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
+    
+    # Проверяем, не забанен ли пользователь
+    if is_banned(user_id):
+        await update.message.reply_text("❌ Вы заблокированы и не можете использовать бота.")
+        return
     
     # Обрабатываем параметр start=getid
     if update.message and update.message.text:
@@ -715,7 +790,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== АДМИН-ПАНЕЛЬ ====================
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Админ-панель"""
+    """Расширенная админ-панель"""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     
@@ -726,18 +801,38 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Удаляем предыдущее сообщение
     await delete_previous_message(user_id, chat_id, context)
     
+    # Получаем статистику
+    data = load_data()
+    users_count = len(data.get('users', []))
+    admins_count = len(data.get('admins', []))
+    channels_count = len(data.get('channel_ids', []))
+    banned_count = len(data.get('banned_users', []))
+    
     keyboard = [
+        [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
         [InlineKeyboardButton("📢 Управление каналами", callback_data="admin_channels")],
         [InlineKeyboardButton("🔗 Управление ссылками", callback_data="admin_links")],
         [InlineKeyboardButton("📁 Управление файлами", callback_data="admin_files")],
         [InlineKeyboardButton("👥 Управление админами", callback_data="admin_admins")],
+        [InlineKeyboardButton("👤 Просмотр пользователей", callback_data="admin_users")],
+        [InlineKeyboardButton("🚫 Бан/Разбан пользователей", callback_data="admin_ban")],
+        [InlineKeyboardButton("📝 Управление текстами", callback_data="admin_texts")],
+        [InlineKeyboardButton("🖼️ Управление изображениями", callback_data="admin_images")],
         [InlineKeyboardButton("📨 Рассылка", callback_data="admin_broadcast")],
+        [InlineKeyboardButton("📋 Логи действий", callback_data="admin_logs")],
+        [InlineKeyboardButton("⚙️ Настройки бота", callback_data="admin_settings")],
+        [InlineKeyboardButton("💾 Экспорт/Импорт данных", callback_data="admin_export")],
         [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     text = (
-        "🔐 <b>Админ-панель</b>\n\n"
+        "🔐 <b>Расширенная админ-панель</b>\n\n"
+        f"📊 <b>Быстрая статистика:</b>\n"
+        f"👥 Пользователей: <b>{users_count}</b>\n"
+        f"👤 Админов: <b>{admins_count}</b>\n"
+        f"📢 Каналов: <b>{channels_count}</b>\n"
+        f"🚫 Забанено: <b>{banned_count}</b>\n\n"
         "Выберите действие:"
     )
     
@@ -953,6 +1048,280 @@ async def admin_broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.message.edit_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
 
 
+async def admin_stats_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню статистики"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        await query.answer("❌ У вас нет доступа", show_alert=True)
+        return
+    
+    await query.answer()
+    
+    data = load_data()
+    users = data.get('users', [])
+    admins = data.get('admins', [])
+    channels = data.get('channel_ids', [])
+    links = data.get('channel_links', [])
+    banned = data.get('banned_users', [])
+    
+    # Подсчитываем активных пользователей (тех, кто не забанен)
+    active_users = [u for u in users if u not in banned]
+    
+    keyboard = [
+        [InlineKeyboardButton("🔄 Обновить", callback_data="admin_stats")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = (
+        "📊 <b>Статистика бота</b>\n\n"
+        f"👥 <b>Пользователи:</b>\n"
+        f"   • Всего: <b>{len(users)}</b>\n"
+        f"   • Активных: <b>{len(active_users)}</b>\n"
+        f"   • Забанено: <b>{len(banned)}</b>\n\n"
+        f"👤 <b>Администраторы:</b> <b>{len(admins)}</b>\n\n"
+        f"📢 <b>Каналы:</b>\n"
+        f"   • ID каналов: <b>{len(channels)}</b>\n"
+        f"   • Ссылок: <b>{len(links)}</b>\n\n"
+        f"📋 <b>Логи:</b> <b>{len(action_logs)}</b> записей\n\n"
+        f"⏰ <b>Время:</b> {asyncio.get_event_loop().time():.0f}"
+    )
+    
+    await query.message.edit_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+
+
+async def admin_users_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню просмотра пользователей"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        await query.answer("❌ У вас нет доступа", show_alert=True)
+        return
+    
+    await query.answer()
+    
+    data = load_data()
+    users = data.get('users', [])
+    banned = data.get('banned_users', [])
+    
+    keyboard = [
+        [InlineKeyboardButton("🔍 Поиск пользователя", callback_data="admin_user_search")],
+        [InlineKeyboardButton("📋 Список всех пользователей", callback_data="admin_user_list")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = (
+        "👤 <b>Просмотр пользователей</b>\n\n"
+        f"👥 Всего пользователей: <b>{len(users)}</b>\n"
+        f"🚫 Забанено: <b>{len(banned)}</b>\n"
+        f"✅ Активных: <b>{len(users) - len(banned)}</b>\n\n"
+        "Выберите действие:"
+    )
+    
+    await query.message.edit_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+
+
+async def admin_ban_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню бана/разбана пользователей"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        await query.answer("❌ У вас нет доступа", show_alert=True)
+        return
+    
+    await query.answer()
+    
+    data = load_data()
+    banned = data.get('banned_users', [])
+    
+    keyboard = [
+        [InlineKeyboardButton("🚫 Забанить пользователя", callback_data="admin_ban_add")],
+        [InlineKeyboardButton("✅ Разбанить пользователя", callback_data="admin_ban_remove")],
+        [InlineKeyboardButton("📋 Список забаненных", callback_data="admin_ban_list")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = (
+        "🚫 <b>Бан/Разбан пользователей</b>\n\n"
+        f"Забанено пользователей: <b>{len(banned)}</b>\n\n"
+        "Выберите действие:"
+    )
+    
+    await query.message.edit_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+
+
+async def admin_texts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню управления текстами"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        await query.answer("❌ У вас нет доступа", show_alert=True)
+        return
+    
+    await query.answer()
+    
+    data = load_data()
+    messages = data.get('messages', {})
+    
+    keyboard = [
+        [InlineKeyboardButton("✏️ Редактировать приветствие", callback_data="admin_text_welcome")],
+        [InlineKeyboardButton("✏️ Редактировать текст успеха", callback_data="admin_text_success")],
+        [InlineKeyboardButton("✏️ Редактировать текст ошибки", callback_data="admin_text_error")],
+        [InlineKeyboardButton("📋 Просмотр всех текстов", callback_data="admin_text_view")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = (
+        "📝 <b>Управление текстами</b>\n\n"
+        f"Сохранено текстов: <b>{len(messages)}</b>\n\n"
+        "Выберите действие:"
+    )
+    
+    await query.message.edit_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+
+
+async def admin_images_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню управления изображениями"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        await query.answer("❌ У вас нет доступа", show_alert=True)
+        return
+    
+    await query.answer()
+    
+    data = load_data()
+    images = data.get('images', {})
+    
+    keyboard = [
+        [InlineKeyboardButton("🖼️ Загрузить Preview.png", callback_data="admin_image_preview")],
+        [InlineKeyboardButton("🖼️ Загрузить succes.png", callback_data="admin_image_success")],
+        [InlineKeyboardButton("🖼️ Загрузить error.png", callback_data="admin_image_error")],
+        [InlineKeyboardButton("🖼️ Загрузить download.jpg", callback_data="admin_image_download")],
+        [InlineKeyboardButton("📋 Просмотр всех изображений", callback_data="admin_image_view")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = (
+        "🖼️ <b>Управление изображениями</b>\n\n"
+        f"Сохранено изображений: <b>{len(images)}</b>\n\n"
+        "Выберите изображение для загрузки:"
+    )
+    
+    await query.message.edit_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+
+
+async def admin_logs_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню логов действий"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        await query.answer("❌ У вас нет доступа", show_alert=True)
+        return
+    
+    await query.answer()
+    
+    # Показываем последние 10 логов
+    recent_logs = action_logs[-10:] if len(action_logs) > 10 else action_logs
+    logs_text = ""
+    for log in reversed(recent_logs):
+        timestamp = log.get('timestamp', 'N/A')
+        action = log.get('action', 'N/A')
+        admin_id = log.get('admin_id', 'N/A')
+        logs_text += f"⏰ {timestamp}\n📝 {action}\n👤 Admin: {admin_id}\n\n"
+    
+    keyboard = [
+        [InlineKeyboardButton("🔄 Обновить", callback_data="admin_logs")],
+        [InlineKeyboardButton("🗑️ Очистить логи", callback_data="admin_logs_clear")],
+        [InlineKeyboardButton("💾 Экспорт логов", callback_data="admin_logs_export")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = (
+        "📋 <b>Логи действий</b>\n\n"
+        f"Всего записей: <b>{len(action_logs)}</b>\n\n"
+        f"<b>Последние действия:</b>\n\n{logs_text if logs_text else 'Логов пока нет'}"
+    )
+    
+    await query.message.edit_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+
+
+async def admin_settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню настроек бота"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        await query.answer("❌ У вас нет доступа", show_alert=True)
+        return
+    
+    await query.answer()
+    
+    data = load_data()
+    settings = data.get('settings', {})
+    
+    auto_delete = settings.get('auto_delete_messages', False)
+    require_subscription = settings.get('require_subscription', True)
+    
+    keyboard = [
+        [InlineKeyboardButton(f"{'✅' if auto_delete else '❌'} Автоудаление сообщений", callback_data="admin_setting_autodelete")],
+        [InlineKeyboardButton(f"{'✅' if require_subscription else '❌'} Требовать подписку", callback_data="admin_setting_subscription")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = (
+        "⚙️ <b>Настройки бота</b>\n\n"
+        f"🗑️ Автоудаление сообщений: <b>{'Включено' if auto_delete else 'Выключено'}</b>\n"
+        f"📢 Требовать подписку: <b>{'Да' if require_subscription else 'Нет'}</b>\n\n"
+        "Выберите настройку для изменения:"
+    )
+    
+    await query.message.edit_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+
+
+async def admin_export_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню экспорта/импорта данных"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        await query.answer("❌ У вас нет доступа", show_alert=True)
+        return
+    
+    await query.answer()
+    
+    keyboard = [
+        [InlineKeyboardButton("💾 Экспорт данных (JSON)", callback_data="admin_export_json")],
+        [InlineKeyboardButton("📥 Импорт данных", callback_data="admin_import_data")],
+        [InlineKeyboardButton("🔄 Резервная копия", callback_data="admin_backup")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = (
+        "💾 <b>Экспорт/Импорт данных</b>\n\n"
+        "Выберите действие:\n\n"
+        "💾 <b>Экспорт</b> - скачать все данные бота\n"
+        "📥 <b>Импорт</b> - загрузить данные из файла\n"
+        "🔄 <b>Резервная копия</b> - создать backup"
+    )
+    
+    await query.message.edit_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+
+
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик callback для админ-панели"""
     query = update.callback_query
@@ -980,16 +1349,39 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     data = query.data
     
     if data == "admin_panel":
+        # Получаем статистику
+        data_obj = load_data()
+        users_count = len(data_obj.get('users', []))
+        admins_count = len(data_obj.get('admins', []))
+        channels_count = len(data_obj.get('channel_ids', []))
+        banned_count = len(data_obj.get('banned_users', []))
+        
         keyboard = [
+            [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
             [InlineKeyboardButton("📢 Управление каналами", callback_data="admin_channels")],
             [InlineKeyboardButton("🔗 Управление ссылками", callback_data="admin_links")],
             [InlineKeyboardButton("📁 Управление файлами", callback_data="admin_files")],
             [InlineKeyboardButton("👥 Управление админами", callback_data="admin_admins")],
+            [InlineKeyboardButton("👤 Просмотр пользователей", callback_data="admin_users")],
+            [InlineKeyboardButton("🚫 Бан/Разбан пользователей", callback_data="admin_ban")],
+            [InlineKeyboardButton("📝 Управление текстами", callback_data="admin_texts")],
+            [InlineKeyboardButton("🖼️ Управление изображениями", callback_data="admin_images")],
             [InlineKeyboardButton("📨 Рассылка", callback_data="admin_broadcast")],
+            [InlineKeyboardButton("📋 Логи действий", callback_data="admin_logs")],
+            [InlineKeyboardButton("⚙️ Настройки бота", callback_data="admin_settings")],
+            [InlineKeyboardButton("💾 Экспорт/Импорт данных", callback_data="admin_export")],
             [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        text = "🔐 <b>Админ-панель</b>\n\nВыберите действие:"
+        text = (
+            "🔐 <b>Расширенная админ-панель</b>\n\n"
+            f"📊 <b>Быстрая статистика:</b>\n"
+            f"👥 Пользователей: <b>{users_count}</b>\n"
+            f"👤 Админов: <b>{admins_count}</b>\n"
+            f"📢 Каналов: <b>{channels_count}</b>\n"
+            f"🚫 Забанено: <b>{banned_count}</b>\n\n"
+            "Выберите действие:"
+        )
         await query.message.edit_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
     
     elif data == "admin_channels":
@@ -1006,6 +1398,30 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     
     elif data == "admin_broadcast":
         await admin_broadcast_menu(update, context)
+    
+    elif data == "admin_stats":
+        await admin_stats_menu(update, context)
+    
+    elif data == "admin_users":
+        await admin_users_menu(update, context)
+    
+    elif data == "admin_ban":
+        await admin_ban_menu(update, context)
+    
+    elif data == "admin_texts":
+        await admin_texts_menu(update, context)
+    
+    elif data == "admin_images":
+        await admin_images_menu(update, context)
+    
+    elif data == "admin_logs":
+        await admin_logs_menu(update, context)
+    
+    elif data == "admin_settings":
+        await admin_settings_menu(update, context)
+    
+    elif data == "admin_export":
+        await admin_export_menu(update, context)
     
     elif data.startswith("admin_channel_add"):
         admin_states[user_id] = "add_channel"
@@ -1121,11 +1537,228 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     
     elif data.startswith("admin_broadcast_start"):
         admin_states[user_id] = "broadcast"
+        log_action(user_id, "Начал рассылку")
         await query.message.edit_text(
             "📨 <b>Рассылка</b>\n\n"
             "Отправьте сообщение, которое хотите разослать всем пользователям:",
             parse_mode=ParseMode.HTML
         )
+    
+    elif data.startswith("admin_ban_add"):
+        admin_states[user_id] = "ban_user"
+        await query.message.edit_text(
+            "🚫 <b>Забанить пользователя</b>\n\n"
+            "Отправьте ID пользователя для бана:",
+            parse_mode=ParseMode.HTML
+        )
+    
+    elif data.startswith("admin_ban_remove"):
+        admin_states[user_id] = "unban_user"
+        await query.message.edit_text(
+            "✅ <b>Разбанить пользователя</b>\n\n"
+            "Отправьте ID пользователя для разбана:",
+            parse_mode=ParseMode.HTML
+        )
+    
+    elif data.startswith("admin_ban_list"):
+        data_obj = load_data()
+        banned = data_obj.get('banned_users', [])
+        if banned:
+            banned_text = "\n".join([f"• <code>{uid}</code>" for uid in banned[:50]])
+            if len(banned) > 50:
+                banned_text += f"\n\n... и еще {len(banned) - 50} пользователей"
+        else:
+            banned_text = "Нет забаненных пользователей"
+        
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_ban")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.edit_text(
+            f"🚫 <b>Забаненные пользователи</b>\n\n{banned_text}",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML
+        )
+    
+    elif data.startswith("admin_user_search"):
+        admin_states[user_id] = "search_user"
+        await query.message.edit_text(
+            "🔍 <b>Поиск пользователя</b>\n\n"
+            "Отправьте ID пользователя для поиска:",
+            parse_mode=ParseMode.HTML
+        )
+    
+    elif data.startswith("admin_user_list"):
+        data_obj = load_data()
+        users = data_obj.get('users', [])
+        if users:
+            users_text = "\n".join([f"• <code>{uid}</code>" for uid in users[:50]])
+            if len(users) > 50:
+                users_text += f"\n\n... и еще {len(users) - 50} пользователей"
+        else:
+            users_text = "Нет пользователей"
+        
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_users")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.edit_text(
+            f"👥 <b>Список пользователей</b>\n\nВсего: {len(users)}\n\n{users_text}",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML
+        )
+    
+    elif data.startswith("admin_text_welcome"):
+        admin_states[user_id] = "edit_text_welcome"
+        await query.message.edit_text(
+            "✏️ <b>Редактирование приветствия</b>\n\n"
+            "Отправьте новый текст приветствия:",
+            parse_mode=ParseMode.HTML
+        )
+    
+    elif data.startswith("admin_text_success"):
+        admin_states[user_id] = "edit_text_success"
+        await query.message.edit_text(
+            "✏️ <b>Редактирование текста успеха</b>\n\n"
+            "Отправьте новый текст:",
+            parse_mode=ParseMode.HTML
+        )
+    
+    elif data.startswith("admin_text_error"):
+        admin_states[user_id] = "edit_text_error"
+        await query.message.edit_text(
+            "✏️ <b>Редактирование текста ошибки</b>\n\n"
+            "Отправьте новый текст:",
+            parse_mode=ParseMode.HTML
+        )
+    
+    elif data.startswith("admin_text_view"):
+        data_obj = load_data()
+        messages = data_obj.get('messages', {})
+        texts = "\n".join([f"• <b>{key}</b>: {value[:50]}..." for key, value in list(messages.items())[:10]])
+        if not texts:
+            texts = "Нет сохраненных текстов"
+        
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_texts")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.edit_text(
+            f"📋 <b>Сохраненные тексты</b>\n\n{texts}",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML
+        )
+    
+    elif data.startswith("admin_image_preview"):
+        admin_states[user_id] = "upload_image_preview"
+        await query.message.edit_text(
+            "🖼️ <b>Загрузка Preview.png</b>\n\n"
+            "Отправьте изображение:",
+            parse_mode=ParseMode.HTML
+        )
+    
+    elif data.startswith("admin_image_success"):
+        admin_states[user_id] = "upload_image_success"
+        await query.message.edit_text(
+            "🖼️ <b>Загрузка succes.png</b>\n\n"
+            "Отправьте изображение:",
+            parse_mode=ParseMode.HTML
+        )
+    
+    elif data.startswith("admin_image_error"):
+        admin_states[user_id] = "upload_image_error"
+        await query.message.edit_text(
+            "🖼️ <b>Загрузка error.png</b>\n\n"
+            "Отправьте изображение:",
+            parse_mode=ParseMode.HTML
+        )
+    
+    elif data.startswith("admin_image_download"):
+        admin_states[user_id] = "upload_image_download"
+        await query.message.edit_text(
+            "🖼️ <b>Загрузка download.jpg</b>\n\n"
+            "Отправьте изображение:",
+            parse_mode=ParseMode.HTML
+        )
+    
+    elif data.startswith("admin_image_view"):
+        data_obj = load_data()
+        images = data_obj.get('images', {})
+        images_text = "\n".join([f"• <b>{key}</b>" for key in list(images.keys())[:10]])
+        if not images_text:
+            images_text = "Нет сохраненных изображений"
+        
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_images")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.edit_text(
+            f"📋 <b>Сохраненные изображения</b>\n\n{images_text}",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML
+        )
+    
+    elif data.startswith("admin_logs_clear"):
+        action_logs.clear()
+        log_action(user_id, "Очистил логи")
+        await query.answer("✅ Логи очищены", show_alert=True)
+        await admin_logs_menu(update, context)
+    
+    elif data.startswith("admin_logs_export"):
+        if action_logs:
+            logs_json = json.dumps(action_logs, ensure_ascii=False, indent=2)
+            logs_file = BytesIO(logs_json.encode('utf-8'))
+            logs_file.name = "logs.json"
+            await context.bot.send_document(
+                chat_id=chat_id,
+                document=InputFile(logs_file, filename="logs.json"),
+                caption="📋 Логи действий"
+            )
+            log_action(user_id, "Экспортировал логи")
+        else:
+            await query.answer("❌ Нет логов для экспорта", show_alert=True)
+    
+    elif data.startswith("admin_setting_autodelete"):
+        data_obj = load_data()
+        settings = data_obj.get('settings', {})
+        settings['auto_delete_messages'] = not settings.get('auto_delete_messages', False)
+        data_obj['settings'] = settings
+        save_data(data_obj)
+        log_action(user_id, f"Изменил автоудаление: {settings['auto_delete_messages']}")
+        await admin_settings_menu(update, context)
+    
+    elif data.startswith("admin_setting_subscription"):
+        data_obj = load_data()
+        settings = data_obj.get('settings', {})
+        settings['require_subscription'] = not settings.get('require_subscription', True)
+        data_obj['settings'] = settings
+        save_data(data_obj)
+        log_action(user_id, f"Изменил требование подписки: {settings['require_subscription']}")
+        await admin_settings_menu(update, context)
+    
+    elif data.startswith("admin_export_json"):
+        data_obj = load_data()
+        export_data = json.dumps(data_obj, ensure_ascii=False, indent=2)
+        export_file = BytesIO(export_data.encode('utf-8'))
+        export_file.name = "bot_data_export.json"
+        await context.bot.send_document(
+            chat_id=chat_id,
+            document=InputFile(export_file, filename="bot_data_export.json"),
+            caption="💾 Экспорт данных бота"
+        )
+        log_action(user_id, "Экспортировал данные")
+    
+    elif data.startswith("admin_import_data"):
+        admin_states[user_id] = "import_data"
+        await query.message.edit_text(
+            "📥 <b>Импорт данных</b>\n\n"
+            "Отправьте JSON файл с данными:",
+            parse_mode=ParseMode.HTML
+        )
+    
+    elif data.startswith("admin_backup"):
+        data_obj = load_data()
+        backup_data = json.dumps(data_obj, ensure_ascii=False, indent=2)
+        backup_file = BytesIO(backup_data.encode('utf-8'))
+        backup_file.name = f"backup_{int(asyncio.get_event_loop().time())}.json"
+        await context.bot.send_document(
+            chat_id=chat_id,
+            document=InputFile(backup_file, filename=backup_file.name),
+            caption="🔄 Резервная копия данных"
+        )
+        log_action(user_id, "Создал резервную копию")
 
 
 async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1152,6 +1785,7 @@ async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 channels.append(channel_id)
                 data['channel_ids'] = channels
                 if save_data(data):
+                    log_action(user_id, f"Добавил канал {channel_id}")
                     admin_states[user_id] = None
                     await message.reply_text(f"✅ Канал {channel_id} добавлен!")
                     await admin_channels_menu(update, context)
@@ -1292,6 +1926,7 @@ async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYP
                     return
             
             if add_admin(admin_id):
+                log_action(user_id, f"Добавил администратора {admin_id}")
                 admin_states[user_id] = None
                 try:
                     user_info = await context.bot.get_chat(admin_id)
@@ -1335,6 +1970,181 @@ async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 await message.reply_text("❌ Ошибка при сохранении")
         else:
             await message.reply_text("❌ Пожалуйста, отправьте файл")
+    
+    elif state == "ban_user":
+        try:
+            ban_id = int(message.text)
+            if ban_user(ban_id):
+                log_action(user_id, f"Забанил пользователя {ban_id}")
+                admin_states[user_id] = None
+                await message.reply_text(f"✅ Пользователь {ban_id} забанен!")
+                await admin_ban_menu(update, context)
+            else:
+                await message.reply_text("❌ Ошибка при бане пользователя")
+        except ValueError:
+            await message.reply_text("❌ Неверный формат ID пользователя")
+    
+    elif state == "unban_user":
+        try:
+            unban_id = int(message.text)
+            if unban_user(unban_id):
+                log_action(user_id, f"Разбанил пользователя {unban_id}")
+                admin_states[user_id] = None
+                await message.reply_text(f"✅ Пользователь {unban_id} разбанен!")
+                await admin_ban_menu(update, context)
+            else:
+                await message.reply_text("❌ Пользователь не был забанен")
+        except ValueError:
+            await message.reply_text("❌ Неверный формат ID пользователя")
+    
+    elif state == "search_user":
+        try:
+            search_id = int(message.text)
+            data = load_data()
+            users = data.get('users', [])
+            banned = data.get('banned_users', [])
+            
+            is_user = search_id in users
+            is_banned = search_id in banned
+            
+            text = (
+                f"🔍 <b>Информация о пользователе</b>\n\n"
+                f"🆔 ID: <code>{search_id}</code>\n"
+                f"👤 В базе: {'✅ Да' if is_user else '❌ Нет'}\n"
+                f"🚫 Статус: {'Забанен' if is_banned else 'Активен'}\n"
+            )
+            
+            try:
+                user_info = await context.bot.get_chat(search_id)
+                text += f"📛 Имя: {user_info.first_name or 'N/A'}\n"
+                if user_info.username:
+                    text += f"👤 Username: @{user_info.username}\n"
+            except:
+                text += "⚠️ Не удалось получить информацию о пользователе\n"
+            
+            admin_states[user_id] = None
+            await message.reply_text(text, parse_mode=ParseMode.HTML)
+            await admin_users_menu(update, context)
+        except ValueError:
+            await message.reply_text("❌ Неверный формат ID пользователя")
+    
+    elif state == "edit_text_welcome":
+        data = load_data()
+        messages = data.get('messages', {})
+        messages['welcome'] = message.text
+        data['messages'] = messages
+        if save_data(data):
+            log_action(user_id, "Изменил текст приветствия")
+            admin_states[user_id] = None
+            await message.reply_text("✅ Текст приветствия обновлен!")
+            await admin_texts_menu(update, context)
+    
+    elif state == "edit_text_success":
+        data = load_data()
+        messages = data.get('messages', {})
+        messages['success'] = message.text
+        data['messages'] = messages
+        if save_data(data):
+            log_action(user_id, "Изменил текст успеха")
+            admin_states[user_id] = None
+            await message.reply_text("✅ Текст успеха обновлен!")
+            await admin_texts_menu(update, context)
+    
+    elif state == "edit_text_error":
+        data = load_data()
+        messages = data.get('messages', {})
+        messages['error'] = message.text
+        data['messages'] = messages
+        if save_data(data):
+            log_action(user_id, "Изменил текст ошибки")
+            admin_states[user_id] = None
+            await message.reply_text("✅ Текст ошибки обновлен!")
+            await admin_texts_menu(update, context)
+    
+    elif state == "upload_image_preview":
+        if message.photo:
+            file = await context.bot.get_file(message.photo[-1].file_id)
+            await file.download_to_drive("Preview.png")
+            data = load_data()
+            images = data.get('images', {})
+            images['preview'] = message.photo[-1].file_id
+            data['images'] = images
+            save_data(data)
+            log_action(user_id, "Загрузил Preview.png")
+            admin_states[user_id] = None
+            await message.reply_text("✅ Изображение Preview.png загружено!")
+            await admin_images_menu(update, context)
+        else:
+            await message.reply_text("❌ Пожалуйста, отправьте изображение")
+    
+    elif state == "upload_image_success":
+        if message.photo:
+            file = await context.bot.get_file(message.photo[-1].file_id)
+            await file.download_to_drive("succes.png")
+            data = load_data()
+            images = data.get('images', {})
+            images['success'] = message.photo[-1].file_id
+            data['images'] = images
+            save_data(data)
+            log_action(user_id, "Загрузил succes.png")
+            admin_states[user_id] = None
+            await message.reply_text("✅ Изображение succes.png загружено!")
+            await admin_images_menu(update, context)
+        else:
+            await message.reply_text("❌ Пожалуйста, отправьте изображение")
+    
+    elif state == "upload_image_error":
+        if message.photo:
+            file = await context.bot.get_file(message.photo[-1].file_id)
+            await file.download_to_drive("error.png")
+            data = load_data()
+            images = data.get('images', {})
+            images['error'] = message.photo[-1].file_id
+            data['images'] = images
+            save_data(data)
+            log_action(user_id, "Загрузил error.png")
+            admin_states[user_id] = None
+            await message.reply_text("✅ Изображение error.png загружено!")
+            await admin_images_menu(update, context)
+        else:
+            await message.reply_text("❌ Пожалуйста, отправьте изображение")
+    
+    elif state == "upload_image_download":
+        if message.photo:
+            file = await context.bot.get_file(message.photo[-1].file_id)
+            await file.download_to_drive("download.jpg")
+            data = load_data()
+            images = data.get('images', {})
+            images['download'] = message.photo[-1].file_id
+            data['images'] = images
+            save_data(data)
+            log_action(user_id, "Загрузил download.jpg")
+            admin_states[user_id] = None
+            await message.reply_text("✅ Изображение download.jpg загружено!")
+            await admin_images_menu(update, context)
+        else:
+            await message.reply_text("❌ Пожалуйста, отправьте изображение")
+    
+    elif state == "import_data":
+        if message.document:
+            try:
+                file = await context.bot.get_file(message.document.file_id)
+                file_data = await file.download_as_bytearray()
+                import_data = json.loads(file_data.decode('utf-8'))
+                
+                # Сохраняем импортированные данные
+                if save_data(import_data):
+                    log_action(user_id, "Импортировал данные")
+                    admin_states[user_id] = None
+                    await message.reply_text("✅ Данные успешно импортированы!")
+                    await admin_export_menu(update, context)
+                else:
+                    await message.reply_text("❌ Ошибка при импорте данных")
+            except Exception as e:
+                logger.error(f"Ошибка при импорте: {e}")
+                await message.reply_text(f"❌ Ошибка при импорте: {str(e)}")
+        else:
+            await message.reply_text("❌ Пожалуйста, отправьте JSON файл")
     
     elif state == "broadcast":
         admin_states[user_id] = None

@@ -1,17 +1,16 @@
 {
   "admins": [
-    6653101277,
     8211610309
   ],
   "channel_ids": [
     -1002209682372,
-    -1003028983767
+    -1002787956505
   ],
   "channel_links": [
     "https://t.me/pro_tweaks",
     "https://t.me/+NAp6PQDiSNJjNDVi"
   ],
-  "file_url": "https://www.dropbox.com/scl/fi/qsq74prqeunndpcq1fuhg/ProTweaker-Installer-3.0.1.exe?rlkey=6nh4d13xm0xf9bayc3l6z973f&st=3w4uldwy&dl=1",
+  "file_url": "https://www.dropbox.com/scl/fi/qsq74prqeunndpcq1fuhg/ProTweaker-Installer-3.0.1.exe?rlkey=6nh4d13xm0xf9bayc3l6z973f&st=20obmgj4&dl=1",
   "users": [
     6653101277,
     8211610309,
@@ -19,5 +18,9 @@
     1345551092,
     7959476074,
     5609638352
-  ]
+  ],
+  "banned_users": [],
+  "messages": {},
+  "images": {},
+  "settings": {}
 }
