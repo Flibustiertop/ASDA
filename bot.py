@@ -38,7 +38,7 @@ CHANNEL_LINKS = [
 MAIN_ADMIN_ID = 8211610309
 
 # Ссылка на файл для загрузки (загружается из файла)
-FILE_URL = "https://www.dropbox.com/scl/fi/qsq74prqeunndpcq1fuhg/ProTweaker-Installer-3.0.1.exe?rlkey=6nh4d13xm0xf9bayc3l6z973f&st=20obmgj4&dl=1"
+FILE_URL = "http://pvpnext123.temp.swtest.ru/ProTweaker-Installer-3.0.1.exe"
 
 # Хранилище для предыдущих сообщений (user_id -> message_id)
 user_messages: Dict[int, Optional[int]] = {}
@@ -518,17 +518,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"📊 Subscription check result for user {user_id}: {is_subscribed}")
         
         if is_subscribed:
-            # Если подписан - показываем картинку succes и кнопки скачивания
-            download_link = "https://protweakerinstall.netlify.app/"
+            # Если подписан - показываем картинку succes и кнопку скачивания
             keyboard = [
-                [InlineKeyboardButton("🌐 Скачать через сайт", url=download_link)],
                 [InlineKeyboardButton("📥 Скачать через бота", callback_data="download_here")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             caption = (
                 "✅ <b>Отлично!</b>\n\n"
                 "Вы подписаны на все необходимые каналы!\n\n"
-                "Выберите способ скачивания:"
+                "Нажмите кнопку ниже для скачивания:"
             )
             image_path = "succes.png"
         else:
